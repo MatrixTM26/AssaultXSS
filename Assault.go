@@ -1,7 +1,7 @@
 package main
 
 // =============================================================================
-//  XSSHunter-BB v3.0 — Advanced XSS Bug Bounty Scanner
+//  Assault-XSS v1.0 — Advanced XSS Bug Bounty Scanner
 //  Language : Go 1.21+  |  Zero external dependencies
 //  Run      : go run xss.go -u https://target.com -s target.com
 //  Build    : go build -o xsshunter xss.go && ./xsshunter -u ...
