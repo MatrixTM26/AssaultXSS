@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"assaultxss/internal/config"
 	"assaultxss/internal/crawler"
@@ -18,6 +19,8 @@ import (
 
 	"github.com/fatih/color"
 )
+
+const ProbeMarker = "xAssaultx"
 
 type Scanner struct {
 	Cfg     *config.Config
@@ -84,7 +87,7 @@ func (pb *ProgressBar) Render() {
 	elapsed := time.Since(pb.StartTime)
 	var eta string
 	if pct > 0.01 {
-		remaining := time.Duration(float64(elapsed)/pct*(1-pct))
+		remaining := time.Duration(float64(elapsed) / pct * (1 - pct))
 		if remaining > time.Hour {
 			eta = ">1h"
 		} else {
@@ -93,13 +96,10 @@ func (pb *ProgressBar) Render() {
 	} else {
 		eta = "---"
 	}
-
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", pb.Width-filled)
-
 	cyan := color.New(color.FgCyan)
 	green := color.New(color.FgGreen, color.Bold)
 	gray := color.New(color.FgHiBlack)
-
 	fmt.Fprintf(os.Stderr, "\r")
 	gray.Fprintf(os.Stderr, "  [")
 	if pct >= 1.0 {
@@ -141,7 +141,7 @@ func NewScanner(cfg *config.Config, log *logger.Logger) *Scanner {
 		Client: &http.Client{
 			Timeout: time.Duration(cfg.Timeout) * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 5 {
+				if len(via) >= 10 {
 					return fmt.Errorf("too many redirects")
 				}
 				return nil
@@ -157,7 +157,6 @@ func (s *Scanner) Run() []logger.VulnResult {
 
 	sem := make(chan struct{}, s.Cfg.Threads)
 	var wg sync.WaitGroup
-
 	for _, rawURL := range s.Cfg.URLs {
 		wg.Add(1)
 		sem <- struct{}{}
@@ -193,13 +192,14 @@ func (s *Scanner) ScanURL(rawURL string, payloads []payload.PayloadEntry) {
 		}
 	}
 
-	s.Log.Info(fmt.Sprintf("Discovered %d page(s) — building test queue...", len(pages)))
+	s.Log.Info(fmt.Sprintf("Discovered %d page(s) — probing reflective parameters...", len(pages)))
 
 	type TestJob struct {
-		PageURL string
-		Param   string
-		IsForm  bool
-		Form    crawler.FormData
+		PageURL       string
+		Param         string
+		IsForm        bool
+		Form          crawler.FormData
+		IsReflective  bool
 	}
 
 	var jobs []TestJob
@@ -209,25 +209,36 @@ func (s *Scanner) ScanURL(rawURL string, payloads []payload.PayloadEntry) {
 			targetParams = map[string][]string{s.Cfg.Param: {""}}
 		}
 		for param := range targetParams {
-			jobs = append(jobs, TestJob{PageURL: page.URL, Param: param})
+			reflective, encType := s.ProbeReflection(page.URL, param)
+			if reflective {
+				s.Log.Info(fmt.Sprintf("Reflective param found: [%s] at %s (encode: %s)", param, page.URL, encType))
+				jobs = append(jobs, TestJob{PageURL: page.URL, Param: param, IsReflective: true})
+			} else {
+				s.Log.Debug(fmt.Sprintf("Not reflective, skipping: [%s] at %s", param, page.URL))
+			}
 		}
 		for _, form := range page.Forms {
 			for param := range form.BuildParams() {
 				if s.Cfg.Param != "" && param != s.Cfg.Param {
 					continue
 				}
-				jobs = append(jobs, TestJob{Param: param, IsForm: true, Form: form})
+				reflective, encType := s.ProbeFormReflection(form, param)
+				if reflective {
+					s.Log.Info(fmt.Sprintf("Reflective form param: [%s] action=%s (encode: %s)", param, form.Action, encType))
+					jobs = append(jobs, TestJob{Param: param, IsForm: true, Form: form, IsReflective: true})
+				}
 			}
 		}
 	}
 
-	totalTasks := len(jobs) * len(payloads)
-	if totalTasks == 0 {
-		s.Log.Warning("No testable parameters found")
+	if len(jobs) == 0 {
+		s.Log.Warning("No reflective parameters found — server may sanitize all input or params not found")
+		s.Log.Warning("Tip: use -p <param> to force-test a specific parameter, or -V for debug info")
 		return
 	}
 
-	s.Log.Info(fmt.Sprintf("Testing %d parameter(s) × %d payloads = %d requests", len(jobs), len(payloads), totalTasks))
+	totalTasks := len(jobs) * len(payloads)
+	s.Log.Info(fmt.Sprintf("Testing %d reflective param(s) × %d payloads = %d requests", len(jobs), len(payloads), totalTasks))
 	fmt.Fprintln(os.Stderr)
 
 	bar := NewProgressBar(totalTasks, "scanning")
@@ -240,7 +251,6 @@ func (s *Scanner) ScanURL(rawURL string, payloads []payload.PayloadEntry) {
 		s.mu.Lock()
 		s.Stats.URLsScanned++
 		s.mu.Unlock()
-
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(j TestJob) {
@@ -259,12 +269,82 @@ func (s *Scanner) ScanURL(rawURL string, payloads []payload.PayloadEntry) {
 	fmt.Fprintln(os.Stderr)
 }
 
+func (s *Scanner) ProbeReflection(pageURL string, param string) (bool, string) {
+	parsed, err := url.Parse(pageURL)
+	if err != nil {
+		return false, ""
+	}
+	q := url.Values{}
+	for k, v := range parsed.Query() {
+		q[k] = v
+	}
+	q.Set(param, ProbeMarker)
+	cloned, _ := url.Parse(parsed.String())
+	cloned.RawQuery = q.Encode()
+
+	_, body, _, err := s.DoRequest("GET", cloned.String(), nil)
+	if err != nil {
+		return false, ""
+	}
+	return s.DetectReflectionType(body, ProbeMarker)
+}
+
+func (s *Scanner) ProbeFormReflection(form crawler.FormData, param string) (bool, string) {
+	formData := make(url.Values)
+	for k, v := range form.BuildParams() {
+		formData.Set(k, v)
+	}
+	formData.Set(param, ProbeMarker)
+
+	method := strings.ToUpper(form.Method)
+	var targetURL string
+	var body io.Reader
+
+	if method == "POST" {
+		targetURL = form.Action
+		body = strings.NewReader(formData.Encode())
+	} else {
+		parsed, err := url.Parse(form.Action)
+		if err != nil {
+			return false, ""
+		}
+		parsed.RawQuery = formData.Encode()
+		targetURL = parsed.String()
+	}
+
+	_, respBody, _, err := s.DoRequest(method, targetURL, body)
+	if err != nil {
+		return false, ""
+	}
+	return s.DetectReflectionType(respBody, ProbeMarker)
+}
+
+func (s *Scanner) DetectReflectionType(body string, marker string) (bool, string) {
+	if strings.Contains(body, marker) {
+		return true, "raw"
+	}
+	if strings.Contains(body, strings.ToLower(marker)) {
+		return true, "lowercase"
+	}
+	if strings.Contains(strings.ToLower(body), strings.ToLower(marker)) {
+		return true, "case-insensitive"
+	}
+	encoded := url.QueryEscape(marker)
+	if strings.Contains(body, encoded) {
+		return true, "url-encoded"
+	}
+	if strings.Contains(body, HTMLEntityEncode(marker)) {
+		return true, "html-entity"
+	}
+	return false, ""
+}
+
 func (s *Scanner) TestParameter(pageURL string, param string, payloads []payload.PayloadEntry, bar *ProgressBar) {
 	s.mu.Lock()
 	s.Stats.ParamsTested++
 	s.mu.Unlock()
 
-	parsed, err := url.Parse(pageURL)
+	baseParsed, err := url.Parse(pageURL)
 	if err != nil {
 		s.Log.Error(fmt.Sprintf("URL parse error: %s → %v", pageURL, err))
 		for range payloads {
@@ -273,15 +353,24 @@ func (s *Scanner) TestParameter(pageURL string, param string, payloads []payload
 		return
 	}
 
+	baseQuery := url.Values{}
+	for k, v := range baseParsed.Query() {
+		baseQuery[k] = v
+	}
+
 	for _, p := range payloads {
 		s.mu.Lock()
 		s.Stats.PayloadsSent++
 		s.mu.Unlock()
 
-		q := parsed.Query()
+		cloned, _ := url.Parse(baseParsed.Scheme + "://" + baseParsed.Host + baseParsed.Path)
+		q := url.Values{}
+		for k, v := range baseQuery {
+			q[k] = v
+		}
 		q.Set(param, p.Value)
-		parsed.RawQuery = q.Encode()
-		testURL := parsed.String()
+		cloned.RawQuery = q.Encode()
+		testURL := cloned.String()
 
 		s.Log.PayloadSent(testURL, param, p.Value)
 
@@ -290,7 +379,7 @@ func (s *Scanner) TestParameter(pageURL string, param string, payloads []payload
 			s.mu.Lock()
 			s.Stats.ErrorCount++
 			s.mu.Unlock()
-			s.Log.Debug(fmt.Sprintf("Request error [%s] %s: %v", param, testURL, err))
+			s.Log.Debug(fmt.Sprintf("Request error [%s]: %v", param, err))
 			bar.Increment()
 			continue
 		}
@@ -348,7 +437,7 @@ func (s *Scanner) TestFormParameter(form crawler.FormData, param string, payload
 			s.mu.Lock()
 			s.Stats.ErrorCount++
 			s.mu.Unlock()
-			s.Log.Debug(fmt.Sprintf("Form request error [%s] %s: %v", param, targetURL, err))
+			s.Log.Debug(fmt.Sprintf("Form error [%s]: %v", param, err))
 			bar.Increment()
 			continue
 		}
@@ -379,9 +468,11 @@ func (s *Scanner) DoRequest(method string, rawURL string, body io.Reader) (*http
 	if err != nil {
 		return nil, "", 0, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (AssaultXSS/1.0; Bug-Bounty-Security-Research)")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 10; Termux) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+	req.Header.Set("Accept-Encoding", "identity")
+	req.Header.Set("Connection", "keep-alive")
 	if method == "POST" {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
@@ -390,7 +481,7 @@ func (s *Scanner) DoRequest(method string, rawURL string, body io.Reader) (*http
 		return nil, "", 0, err
 	}
 	defer resp.Body.Close()
-	respBytes, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	respBytes, err := io.ReadAll(io.LimitReader(resp.Body, 5<<20))
 	if err != nil {
 		return resp, "", resp.StatusCode, err
 	}
@@ -398,7 +489,7 @@ func (s *Scanner) DoRequest(method string, rawURL string, body io.Reader) (*http
 }
 
 func (s *Scanner) AnalyzeResponse(body string, p payload.PayloadEntry, param string, testURL string, statusCode int, method string) (logger.VulnResult, bool) {
-	evidence, reflected, context := s.CheckReflection(body, p.Value)
+	evidence, reflected, context, matchType := s.CheckReflection(body, p.Value)
 	if !reflected {
 		return logger.VulnResult{}, false
 	}
@@ -411,7 +502,7 @@ func (s *Scanner) AnalyzeResponse(body string, p payload.PayloadEntry, param str
 		PayloadLevel: p.Level,
 		LevelName:    payload.LevelName(p.Level),
 		PoCURL:       pocURL,
-		Evidence:     evidence,
+		Evidence:     fmt.Sprintf("[%s] %s", matchType, evidence),
 		Timestamp:    time.Now().Format(time.RFC3339),
 		StatusCode:   statusCode,
 		ResponseSize: len(body),
@@ -420,19 +511,67 @@ func (s *Scanner) AnalyzeResponse(body string, p payload.PayloadEntry, param str
 	}, true
 }
 
-func (s *Scanner) CheckReflection(body string, payloadVal string) (string, bool, string) {
-	if strings.Contains(body, payloadVal) {
-		return s.ExtractEvidence(body, payloadVal), true, s.DetermineContext(body, payloadVal)
+func (s *Scanner) CheckReflection(body string, payloadVal string) (string, bool, string, string) {
+	type candidate struct {
+		needle    string
+		matchType string
 	}
-	if decoded, err := url.QueryUnescape(payloadVal); err == nil && decoded != payloadVal {
-		if strings.Contains(body, decoded) {
-			return s.ExtractEvidence(body, decoded) + " [URL-decoded]", true, s.DetermineContext(body, decoded)
+
+	candidates := []candidate{
+		{payloadVal, "raw"},
+	}
+
+	if dec, err := url.QueryUnescape(payloadVal); err == nil && dec != payloadVal {
+		candidates = append(candidates, candidate{dec, "url-decoded"})
+	}
+
+	if dec2, err := url.QueryUnescape(url.QueryEscape(payloadVal)); err == nil {
+		if dec2 != payloadVal {
+			candidates = append(candidates, candidate{dec2, "double-url-decoded"})
 		}
 	}
-	if htmlDecoded := s.HTMLDecodeSimple(payloadVal); htmlDecoded != payloadVal && strings.Contains(body, htmlDecoded) {
-		return s.ExtractEvidence(body, htmlDecoded) + " [HTML-decoded]", true, s.DetermineContext(body, htmlDecoded)
+
+	htmlDec := HTMLEntityDecode(payloadVal)
+	if htmlDec != payloadVal {
+		candidates = append(candidates, candidate{htmlDec, "html-decoded"})
 	}
-	return "", false, ""
+
+	htmlEnc := HTMLEntityEncode(payloadVal)
+	if htmlEnc != payloadVal {
+		candidates = append(candidates, candidate{htmlEnc, "html-encoded-in-body"})
+	}
+
+	mixDec := HTMLEntityDecode(payloadVal)
+	if urlDec, err := url.QueryUnescape(mixDec); err == nil && urlDec != payloadVal {
+		candidates = append(candidates, candidate{urlDec, "html+url-decoded"})
+	}
+
+	lowerBody := strings.ToLower(body)
+
+	for _, c := range candidates {
+		if strings.Contains(body, c.needle) {
+			ev := s.ExtractEvidence(body, c.needle)
+			ctx := s.DetermineContext(body, c.needle)
+			return ev, true, ctx, c.matchType
+		}
+		lowerNeedle := strings.ToLower(c.needle)
+		if strings.Contains(lowerBody, lowerNeedle) {
+			idx := strings.Index(lowerBody, lowerNeedle)
+			actualSnippet := body[idx : idx+len(lowerNeedle)]
+			ev := s.ExtractEvidence(body, actualSnippet)
+			ctx := s.DetermineContext(body, actualSnippet)
+			return ev, true, ctx, c.matchType + "/case-insensitive"
+		}
+	}
+
+	stripped := StripHTMLTags(payloadVal)
+	if stripped != "" && stripped != payloadVal && strings.Contains(body, stripped) {
+		ev := s.ExtractEvidence(body, stripped)
+		ctx := s.DetermineContext(body, stripped)
+		return ev, true, ctx, "partial-strip"
+	}
+
+	return "", false, "", ""
 }
 
 func (s *Scanner) ExtractEvidence(body string, needle string) string {
@@ -440,8 +579,8 @@ func (s *Scanner) ExtractEvidence(body string, needle string) string {
 	if idx == -1 {
 		return ""
 	}
-	start := idx - 80
-	end := idx + len(needle) + 80
+	start := idx - 100
+	end := idx + len(needle) + 100
 	if start < 0 {
 		start = 0
 	}
@@ -450,7 +589,8 @@ func (s *Scanner) ExtractEvidence(body string, needle string) string {
 	}
 	snippet := strings.ReplaceAll(body[start:end], "\n", " ")
 	snippet = strings.ReplaceAll(snippet, "\r", "")
-	return "..." + strings.TrimSpace(snippet) + "..."
+	snippet = strings.Join(strings.Fields(snippet), " ")
+	return "..." + snippet + "..."
 }
 
 func (s *Scanner) DetermineContext(body string, needle string) string {
@@ -461,24 +601,24 @@ func (s *Scanner) DetermineContext(body string, needle string) string {
 	before := body[:idx]
 	lastTag := strings.LastIndex(before, "<")
 	lastClose := strings.LastIndex(before, ">")
-	if lastClose > lastTag {
+	if lastTag == -1 || lastClose > lastTag {
 		return "text-node"
 	}
-	if lastTag == -1 {
-		return "text-node"
-	}
-	segment := before[lastTag:]
-	if strings.Contains(segment, "script") {
+	segment := strings.ToLower(before[lastTag:])
+	if strings.HasPrefix(segment, "<script") {
 		return "script-block"
 	}
-	if strings.Contains(segment, "style") {
+	if strings.HasPrefix(segment, "<style") {
 		return "style-block"
 	}
-	if strings.Contains(segment, "href=") || strings.Contains(segment, "src=") || strings.Contains(segment, "action=") {
+	if strings.Contains(segment, "href=") || strings.Contains(segment, "src=") || strings.Contains(segment, "action=") || strings.Contains(segment, "data=") {
 		return "attribute-value-url"
 	}
 	if idx > 0 && (body[idx-1] == '"' || body[idx-1] == '\'') {
 		return "attribute-value-quoted"
+	}
+	if strings.Contains(segment, "on") {
+		return "event-handler"
 	}
 	return "html-attribute"
 }
@@ -494,16 +634,59 @@ func (s *Scanner) BuildPoCURL(rawURL string, param string, payloadVal string) st
 	return parsed.String()
 }
 
-func (s *Scanner) HTMLDecodeSimple(input string) string {
-	return strings.NewReplacer(
-		"&lt;", "<", "&gt;", ">", "&amp;", "&",
-		"&quot;", "\"", "&#39;", "'", "&#x27;", "'",
-		"&#x2F;", "/", "&#47;", "/",
-	).Replace(input)
-}
-
 func (s *Scanner) GetStats() ScanStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.Stats
+}
+
+func HTMLEntityDecode(input string) string {
+	return strings.NewReplacer(
+		"&lt;", "<", "&gt;", ">", "&amp;", "&",
+		"&quot;", "\"", "&#34;", "\"", "&#39;", "'",
+		"&#x27;", "'", "&#x2F;", "/", "&#47;", "/",
+		"&apos;", "'", "&#x3C;", "<", "&#x3E;", ">",
+		"&#60;", "<", "&#62;", ">", "&#x22;", "\"",
+		"&#x60;", "`", "&grave;", "`",
+	).Replace(input)
+}
+
+func HTMLEntityEncode(input string) string {
+	var sb strings.Builder
+	for _, r := range input {
+		switch r {
+		case '<':
+			sb.WriteString("&lt;")
+		case '>':
+			sb.WriteString("&gt;")
+		case '"':
+			sb.WriteString("&quot;")
+		case '\'':
+			sb.WriteString("&#39;")
+		case '&':
+			sb.WriteString("&amp;")
+		default:
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
+}
+
+func StripHTMLTags(input string) string {
+	var sb strings.Builder
+	inTag := false
+	for _, r := range input {
+		if r == '<' {
+			inTag = true
+			continue
+		}
+		if r == '>' {
+			inTag = false
+			continue
+		}
+		if !inTag && !unicode.IsSpace(r) {
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
 }

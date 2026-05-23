@@ -57,7 +57,9 @@ func main() {
 
 func PrintBanner() {
 	cyan := color.New(color.FgCyan, color.Bold)
+	yellow := color.New(color.FgYellow)
 	red := color.New(color.FgRed, color.Bold)
+	gray := color.New(color.FgHiBlack)
 
 	red.Println(`
  █████╗ ███████╗███████╗ █████╗ ██╗   ██╗██╗  ████████╗██╗  ██╗███████╗███████╗
@@ -67,5 +69,7 @@ func PrintBanner() {
 ██║  ██║███████║███████║██║  ██║╚██████╔╝███████╗██║   ██╔╝ ██╗███████║███████║
 ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝  ╚═╝╚══════╝╚══════╝`)
 	cyan.Println("                    Advanced XSS Vulnerability Scanner v1.0.0")
+	yellow.Println("                    For Authorized Bug Bounty Use Only")
+	gray.Println("                    HackerOne / Bugcrowd  |  Ensure Written Scope Permission")
 	fmt.Println()
 }

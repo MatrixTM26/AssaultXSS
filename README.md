@@ -1,5 +1,4 @@
 # AssaultXSS v1.0.0
-
 **Advanced XSS Vulnerability Scanner — Authorized Bug Bounty Use Only**
 
 > Built for HackerOne & Bugcrowd authorized security researchers.  
@@ -10,20 +9,18 @@
 ## Installation
 
 ### Prerequisites
-
 - Go 1.21+ installed (`pkg install golang` on Termux)
 
 ### Build
 
 ```bash
-git clone https://github.com/MatrixTM26/AssaultXSS.git
+git clone <repo>
 cd AssaultXSS
 go mod tidy
 go build -o assaultxss ./cmd/main.go
 ```
 
 ### Build for Android (ARM64)
-
 ```bash
 GOOS=linux GOARCH=arm64 go build -o assaultxss-arm64 ./cmd/main.go
 ```
@@ -36,30 +33,30 @@ GOOS=linux GOARCH=arm64 go build -o assaultxss-arm64 ./cmd/main.go
 assaultxss [OPTIONS]
 ```
 
-| Flag         | Description                      |
-| ------------ | -------------------------------- |
-| `-u <url>`   | Target URL to scan               |
-| `-L <file>`  | File containing list of URLs     |
-| `-d <int>`   | Crawl depth (default: 2)         |
-| `-t <int>`   | Timeout in seconds (default: 10) |
-| `-T <int>`   | Concurrent threads (default: 5)  |
-| `-p <param>` | Test specific parameter only     |
-| `-l <1-5>`   | Payload level (1=Basic → 5=Full) |
-| `-V`         | Enable verbose output            |
-| `-e <file>`  | Export results (.json or .txt)   |
-| `-h`         | Show help                        |
+| Flag | Description |
+|------|-------------|
+| `-u <url>`    | Target URL to scan |
+| `-L <file>`   | File containing list of URLs |
+| `-d <int>`    | Crawl depth (default: 2) |
+| `-t <int>`    | Timeout in seconds (default: 10) |
+| `-T <int>`    | Concurrent threads (default: 5) |
+| `-p <param>`  | Test specific parameter only |
+| `-l <1-5>`    | Payload level (1=Basic → 5=Full) |
+| `-V`          | Enable verbose output |
+| `-e <file>`   | Export results (.json or .txt) |
+| `-h`          | Show help |
 
 ---
 
 ## Payload Levels
 
-| Level | Name     | Description                                                             |
-| ----- | -------- | ----------------------------------------------------------------------- |
-| 1     | Basic    | alert/confirm/prompt, script tags, img onerror                          |
-| 2     | Medium   | Case mix, event handlers, tag breaks, attribute injection               |
+| Level | Name     | Description |
+|-------|----------|-------------|
+| 1     | Basic    | alert/confirm/prompt, script tags, img onerror |
+| 2     | Medium   | Case mix, event handlers, tag breaks, attribute injection |
 | 3     | Advanced | CharCode, base64 eval, unicode/hex escapes, URL encoded, filter evasion |
-| 4     | Expert   | DOM-based, polyglots, WAF bypass, constructor chains, iframe srcdoc     |
-| 5     | Full     | All above + blind XSS probes, dynamic import, Symbol/Proxy traps        |
+| 4     | Expert   | DOM-based, polyglots, WAF bypass, constructor chains, iframe srcdoc |
+| 5     | Full     | All above + blind XSS probes, dynamic import, Symbol/Proxy traps |
 
 ---
 
@@ -93,7 +90,6 @@ assaultxss [OPTIONS]
 - **[DBG]** - Debug output (enabled with `-V`)
 
 ### Export Formats
-
 - `.json` — Machine-readable with full metadata per finding
 - `.txt` — Human-readable report with evidence snippets
 
