@@ -10,7 +10,7 @@ _  ___ |(__  )_(__  )/ /_/ // /_/ /_  / / /_
 
 High speed & lightweight Cross Site Scripting (XSS) vulnerabilities scanner toolkit writen in Go.
 
-![License](https://img.shields.io/github/license/MatrixTM26/AssaultXSS?style=for-the-badge&color=green&labelColor=000000)
+![License](https://img.shields.io/badge/AGPL-v3-000000?style=for-the-badge&logo=gnu&logoColor=A42E2B&labelColor=000000&color=brightgreen)
 ![Golang](https://img.shields.io/badge/Golang-1.21+-000000?style=for-the-badge&logo=go&logoColor=00bef9)
 
 ### Installation & Usage
@@ -105,11 +105,11 @@ go build -o assaultxss ./cmd/main.go
 
 #### AUTHOR
 
-[![AUTHOR](https://img.shields.io/badge/MatrixTM26-000000?style=for-the-badge&logo=github&logoColor=ff0000)](https://github.com/MatrixTM26)
+[![AUTHOR](https://img.shields.io/badge/MatrixTM26-000000?style=for-the-badge&logo=github&logoColor=ffffff)](https://github.com/MatrixTM26)
 
 #### License
 
-![License](https://img.shields.io/github/license/MatrixTM26/AssaultXSS?style=for-the-badge&color=green&labelColor=000000)
+![License](https://img.shields.io/badge/AGPL-v3-000000?style=for-the-badge&logo=gnu&logoColor=A42E2B&labelColor=000000&color=brightgreen)
 
 #### Support Me
 
