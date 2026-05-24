@@ -21,8 +21,7 @@ func main() {
 
 	cfg, err := config.ParseFlags()
 	if err != nil {
-		colorRed := color.New(color.FgRed, color.Bold)
-		colorRed.Printf("\n[ERR] %v\n\n", err)
+		color.New(color.FgRed, color.Bold).Printf("\n[ERR] %v\n\n", err)
 		config.PrintHelp()
 		os.Exit(1)
 	}
@@ -30,9 +29,13 @@ func main() {
 	PrintBanner()
 
 	log := logger.NewLogger(cfg.Verbose)
+	log.Info(fmt.Sprintf("AssaultXSS v1.1.0 — %d target(s) loaded", len(cfg.URLs)))
 
-	log.Info(fmt.Sprintf("AssaultXSS v1.0.0 initialized — %d target(s) loaded", len(cfg.URLs)))
-	log.Info("Authorized bug bounty mode — ensure you have written scope permission")
+	if len(cfg.ExternalPayloads) > 0 {
+		log.Info(fmt.Sprintf("External payloads: %d loaded from file", len(cfg.ExternalPayloads)))
+	}
+
+	log.Info("Authorized bug bounty mode — ensure written scope permission")
 	fmt.Println()
 
 	sc := engine.NewScanner(cfg, log)
@@ -41,12 +44,15 @@ func main() {
 	elapsed := time.Since(start)
 
 	stats := sc.GetStats()
-	log.PrintSummary(stats.PayloadsSent, stats.VulnsFound, stats.URLsScanned, elapsed)
+	breakdown := sc.GetSeverityBreakdown()
+	log.PrintSummary(stats.PayloadsSent, stats.VulnsFound, stats.URLsScanned, elapsed, breakdown)
 
-	if cfg.ExportFile != "" && len(results) > 0 {
-		reporter.ExportResults(results, cfg.ExportFile, log)
-	} else if cfg.ExportFile != "" && len(results) == 0 {
-		log.Info("No vulnerabilities found — export skipped")
+	if cfg.ExportFile != "" {
+		if len(results) > 0 {
+			reporter.ExportResults(results, cfg.ExportFile, log)
+		} else {
+			log.Info("No vulnerabilities found — export skipped")
+		}
 	}
 
 	if len(results) > 0 {
@@ -56,9 +62,9 @@ func main() {
 }
 
 func PrintBanner() {
+	red := color.New(color.FgRed, color.Bold)
 	cyan := color.New(color.FgCyan, color.Bold)
 	yellow := color.New(color.FgYellow)
-	red := color.New(color.FgRed, color.Bold)
 	gray := color.New(color.FgHiBlack)
 
 	red.Println(`
@@ -68,8 +74,8 @@ func PrintBanner() {
 ██╔══██║╚════██║╚════██║██╔══██║██║   ██║██║     ██║    ██╔██╗ ╚════██║╚════██║
 ██║  ██║███████║███████║██║  ██║╚██████╔╝███████╗██║   ██╔╝ ██╗███████║███████║
 ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝  ╚═╝╚══════╝╚══════╝`)
-	cyan.Println("                    Advanced XSS Vulnerability Scanner v1.0.0")
-	yellow.Println("                    For Authorized Bug Bounty Use Only")
-	gray.Println("                    HackerOne / Bugcrowd  |  Ensure Written Scope Permission")
+	cyan.Println("                    Advanced XSS Vulnerability Scanner v1.1.0")
+	yellow.Println("                    Authorized Bug Bounty Use Only")
+	gray.Println("                    HackerOne / Bugcrowd  |  Verify scope before testing")
 	fmt.Println()
 }

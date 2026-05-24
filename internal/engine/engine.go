@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,7 +21,30 @@ import (
 	"github.com/fatih/color"
 )
 
-const ProbeMarker = "xAssaultx"
+const ProbeMarker = "xAssaultx31337"
+
+var executablePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)<script[^>]*>[\s\S]*?` + regexp.QuoteMeta("xAssaultx31337")),
+	regexp.MustCompile(`(?i)on\w+\s*=\s*["']?[^"'>]*` + regexp.QuoteMeta("xAssaultx31337")),
+	regexp.MustCompile(`(?i)<[a-z][^>]*\s+on\w+\s*=[^>]*` + regexp.QuoteMeta("xAssaultx31337")),
+	regexp.MustCompile(`(?i)javascript\s*:[^"'>]*` + regexp.QuoteMeta("xAssaultx31337")),
+	regexp.MustCompile(`(?i)<svg[^>]*>[^<]*` + regexp.QuoteMeta("xAssaultx31337")),
+	regexp.MustCompile(`(?i)<img[^>]*onerror[^>]*` + regexp.QuoteMeta("xAssaultx31337")),
+}
+
+var executablePayloadPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)<script[\s>]`),
+	regexp.MustCompile(`(?i)\son\w+\s*=`),
+	regexp.MustCompile(`(?i)javascript\s*:`),
+	regexp.MustCompile(`(?i)<svg[\s>]`),
+	regexp.MustCompile(`(?i)<img[^>]+onerror`),
+	regexp.MustCompile(`(?i)<iframe[\s>]`),
+	regexp.MustCompile(`(?i)<body[\s>]`),
+	regexp.MustCompile(`(?i)<details[^>]+ontoggle`),
+	regexp.MustCompile(`(?i)<input[^>]+onfocus`),
+	regexp.MustCompile(`(?i)<video[\s>]`),
+	regexp.MustCompile(`(?i)<audio[\s>]`),
+}
 
 type Scanner struct {
 	Cfg     *config.Config
@@ -54,7 +78,7 @@ type ProgressBar struct {
 func NewProgressBar(total int, label string) *ProgressBar {
 	return &ProgressBar{
 		Total:     int64(total),
-		Width:     40,
+		Width:     38,
 		Label:     label,
 		StartTime: time.Now(),
 	}
@@ -86,7 +110,7 @@ func (pb *ProgressBar) Render() {
 	}
 	elapsed := time.Since(pb.StartTime)
 	var eta string
-	if pct > 0.01 {
+	if pct > 0.02 {
 		remaining := time.Duration(float64(elapsed) / pct * (1 - pct))
 		if remaining > time.Hour {
 			eta = ">1h"
@@ -113,14 +137,13 @@ func (pb *ProgressBar) Render() {
 	} else {
 		cyan.Fprintf(os.Stderr, "%5.1f%%", pct*100)
 	}
-	gray.Fprintf(os.Stderr, "  %d/%d  ETA:%s  %s  ", current, total, eta, pb.Label)
+	gray.Fprintf(os.Stderr, "  %d/%d  ETA:%-6s  %s  ", current, total, eta, pb.Label)
 }
 
 func (pb *ProgressBar) Finish() {
 	pb.mu.Lock()
 	pb.finished = true
 	pb.mu.Unlock()
-	atomic.StoreInt64(&pb.Current, pb.Total)
 	current := pb.Total
 	bar := strings.Repeat("█", pb.Width)
 	elapsed := time.Since(pb.StartTime).Round(time.Millisecond)
@@ -131,7 +154,7 @@ func (pb *ProgressBar) Finish() {
 	green.Fprintf(os.Stderr, "%s", bar)
 	gray.Fprintf(os.Stderr, "] ")
 	green.Fprintf(os.Stderr, "100.0%%")
-	gray.Fprintf(os.Stderr, "  %d/%d  done:%s  %s  \n", current, current, elapsed, pb.Label)
+	gray.Fprintf(os.Stderr, "  %d/%d  done:%-8s  %s  \n", current, current, elapsed, pb.Label)
 }
 
 func NewScanner(cfg *config.Config, log *logger.Logger) *Scanner {
@@ -152,11 +175,11 @@ func NewScanner(cfg *config.Config, log *logger.Logger) *Scanner {
 }
 
 func (s *Scanner) Run() []logger.VulnResult {
-	payloads := payload.GetPayloads(s.Cfg.Level)
+	payloads := payload.GetPayloads(s.Cfg.Level, s.Cfg.ExternalPayloads)
 	s.Log.Info(fmt.Sprintf("Loaded %d payloads for level %d (%s)", len(payloads), s.Cfg.Level, payload.LevelName(s.Cfg.Level)))
 
-	sem := make(chan struct{}, s.Cfg.Threads)
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, s.Cfg.Threads)
 	for _, rawURL := range s.Cfg.URLs {
 		wg.Add(1)
 		sem <- struct{}{}
@@ -175,7 +198,7 @@ func (s *Scanner) ScanURL(rawURL string, payloads []payload.PayloadEntry) {
 
 	cr, err := crawler.NewCrawler(rawURL, s.Cfg.Depth, s.Cfg.Timeout, s.Cfg.Threads, s.Log)
 	if err != nil {
-		s.Log.Error(fmt.Sprintf("Crawler init failed for %s: %v", rawURL, err))
+		s.Log.Error(fmt.Sprintf("Crawler init failed: %v", err))
 		return
 	}
 
@@ -195,26 +218,32 @@ func (s *Scanner) ScanURL(rawURL string, payloads []payload.PayloadEntry) {
 	s.Log.Info(fmt.Sprintf("Discovered %d page(s) — probing reflective parameters...", len(pages)))
 
 	type TestJob struct {
-		PageURL       string
-		Param         string
-		IsForm        bool
-		Form          crawler.FormData
-		IsReflective  bool
+		PageURL string
+		Param   string
+		IsForm  bool
+		Form    crawler.FormData
 	}
 
 	var jobs []TestJob
+	seen := make(map[string]bool)
+
 	for _, page := range pages {
 		targetParams := page.Params
 		if s.Cfg.Param != "" {
 			targetParams = map[string][]string{s.Cfg.Param: {""}}
 		}
 		for param := range targetParams {
+			key := page.URL + "|" + param
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
 			reflective, encType := s.ProbeReflection(page.URL, param)
 			if reflective {
-				s.Log.Info(fmt.Sprintf("Reflective param found: [%s] at %s (encode: %s)", param, page.URL, encType))
-				jobs = append(jobs, TestJob{PageURL: page.URL, Param: param, IsReflective: true})
+				s.Log.Info(fmt.Sprintf("Reflective param: [%s] at %s (type: %s)", param, page.URL, encType))
+				jobs = append(jobs, TestJob{PageURL: page.URL, Param: param})
 			} else {
-				s.Log.Debug(fmt.Sprintf("Not reflective, skipping: [%s] at %s", param, page.URL))
+				s.Log.Debug(fmt.Sprintf("Not reflective — skipping: [%s] at %s", param, page.URL))
 			}
 		}
 		for _, form := range page.Forms {
@@ -222,18 +251,23 @@ func (s *Scanner) ScanURL(rawURL string, payloads []payload.PayloadEntry) {
 				if s.Cfg.Param != "" && param != s.Cfg.Param {
 					continue
 				}
+				key := form.Action + "|form|" + param
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
 				reflective, encType := s.ProbeFormReflection(form, param)
 				if reflective {
-					s.Log.Info(fmt.Sprintf("Reflective form param: [%s] action=%s (encode: %s)", param, form.Action, encType))
-					jobs = append(jobs, TestJob{Param: param, IsForm: true, Form: form, IsReflective: true})
+					s.Log.Info(fmt.Sprintf("Reflective form param: [%s] action=%s (type: %s)", param, form.Action, encType))
+					jobs = append(jobs, TestJob{Param: param, IsForm: true, Form: form})
 				}
 			}
 		}
 	}
 
 	if len(jobs) == 0 {
-		s.Log.Warning("No reflective parameters found — server may sanitize all input or params not found")
-		s.Log.Warning("Tip: use -p <param> to force-test a specific parameter, or -V for debug info")
+		s.Log.Warning("No reflective parameters found")
+		s.Log.Warning("Try: -p <param> to force-test a specific param, or increase -d depth")
 		return
 	}
 
@@ -241,7 +275,7 @@ func (s *Scanner) ScanURL(rawURL string, payloads []payload.PayloadEntry) {
 	s.Log.Info(fmt.Sprintf("Testing %d reflective param(s) × %d payloads = %d requests", len(jobs), len(payloads), totalTasks))
 	fmt.Fprintln(os.Stderr)
 
-	bar := NewProgressBar(totalTasks, "scanning")
+	bar := NewProgressBar(totalTasks, "xss-scan")
 	s.Bar = bar
 
 	var wg sync.WaitGroup
@@ -279,14 +313,14 @@ func (s *Scanner) ProbeReflection(pageURL string, param string) (bool, string) {
 		q[k] = v
 	}
 	q.Set(param, ProbeMarker)
-	cloned, _ := url.Parse(parsed.String())
+	cloned, _ := url.Parse(parsed.Scheme + "://" + parsed.Host + parsed.Path)
 	cloned.RawQuery = q.Encode()
-
 	_, body, _, err := s.DoRequest("GET", cloned.String(), nil)
 	if err != nil {
 		return false, ""
 	}
-	return s.DetectReflectionType(body, ProbeMarker)
+	_, ok, encType := DetectReflection(body, ProbeMarker)
+	return ok, encType
 }
 
 func (s *Scanner) ProbeFormReflection(form crawler.FormData, param string) (bool, string) {
@@ -295,11 +329,9 @@ func (s *Scanner) ProbeFormReflection(form crawler.FormData, param string) (bool
 		formData.Set(k, v)
 	}
 	formData.Set(param, ProbeMarker)
-
 	method := strings.ToUpper(form.Method)
 	var targetURL string
 	var body io.Reader
-
 	if method == "POST" {
 		targetURL = form.Action
 		body = strings.NewReader(formData.Encode())
@@ -311,32 +343,32 @@ func (s *Scanner) ProbeFormReflection(form crawler.FormData, param string) (bool
 		parsed.RawQuery = formData.Encode()
 		targetURL = parsed.String()
 	}
-
 	_, respBody, _, err := s.DoRequest(method, targetURL, body)
 	if err != nil {
 		return false, ""
 	}
-	return s.DetectReflectionType(respBody, ProbeMarker)
+	_, ok, encType := DetectReflection(respBody, ProbeMarker)
+	return ok, encType
 }
 
-func (s *Scanner) DetectReflectionType(body string, marker string) (bool, string) {
+func DetectReflection(body string, marker string) (string, bool, string) {
 	if strings.Contains(body, marker) {
-		return true, "raw"
+		return marker, true, "raw"
 	}
-	if strings.Contains(body, strings.ToLower(marker)) {
-		return true, "lowercase"
+	lower := strings.ToLower(marker)
+	if strings.Contains(strings.ToLower(body), lower) {
+		return lower, true, "case-insensitive"
 	}
-	if strings.Contains(strings.ToLower(body), strings.ToLower(marker)) {
-		return true, "case-insensitive"
+	if enc := url.QueryEscape(marker); strings.Contains(body, enc) {
+		return enc, true, "url-encoded"
 	}
-	encoded := url.QueryEscape(marker)
-	if strings.Contains(body, encoded) {
-		return true, "url-encoded"
+	if enc := HTMLEntityEncode(marker); strings.Contains(body, enc) {
+		return enc, true, "html-entity-encoded"
 	}
-	if strings.Contains(body, HTMLEntityEncode(marker)) {
-		return true, "html-entity"
+	if dec := HTMLEntityDecode(marker); dec != marker && strings.Contains(body, dec) {
+		return dec, true, "html-entity-decoded"
 	}
-	return false, ""
+	return "", false, ""
 }
 
 func (s *Scanner) TestParameter(pageURL string, param string, payloads []payload.PayloadEntry, bar *ProgressBar) {
@@ -346,13 +378,11 @@ func (s *Scanner) TestParameter(pageURL string, param string, payloads []payload
 
 	baseParsed, err := url.Parse(pageURL)
 	if err != nil {
-		s.Log.Error(fmt.Sprintf("URL parse error: %s → %v", pageURL, err))
 		for range payloads {
 			bar.Increment()
 		}
 		return
 	}
-
 	baseQuery := url.Values{}
 	for k, v := range baseParsed.Query() {
 		baseQuery[k] = v
@@ -379,7 +409,6 @@ func (s *Scanner) TestParameter(pageURL string, param string, payloads []payload
 			s.mu.Lock()
 			s.Stats.ErrorCount++
 			s.mu.Unlock()
-			s.Log.Debug(fmt.Sprintf("Request error [%s]: %v", param, err))
 			bar.Increment()
 			continue
 		}
@@ -392,6 +421,11 @@ func (s *Scanner) TestParameter(pageURL string, param string, payloads []payload
 			s.mu.Unlock()
 			fmt.Fprintln(os.Stderr)
 			s.Log.VulnFound(result)
+		} else if s.Cfg.Verbose {
+			evidence, ok, _ := DetectReflection(body, p.Value)
+			if ok {
+				s.Log.ReflectOnly(param, evidence)
+			}
 		}
 		bar.Increment()
 	}
@@ -437,7 +471,6 @@ func (s *Scanner) TestFormParameter(form crawler.FormData, param string, payload
 			s.mu.Lock()
 			s.Stats.ErrorCount++
 			s.mu.Unlock()
-			s.Log.Debug(fmt.Sprintf("Form error [%s]: %v", param, err))
 			bar.Increment()
 			continue
 		}
@@ -468,8 +501,8 @@ func (s *Scanner) DoRequest(method string, rawURL string, body io.Reader) (*http
 	if err != nil {
 		return nil, "", 0, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 10; Termux) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("Connection", "keep-alive")
@@ -493,22 +526,135 @@ func (s *Scanner) AnalyzeResponse(body string, p payload.PayloadEntry, param str
 	if !reflected {
 		return logger.VulnResult{}, false
 	}
+
+	executable := IsExecutableReflection(body, p.Value, context)
+	sev, score := ScoreVulnerability(p, context, matchType, executable)
+
+	if sev == logger.SeverityInfo {
+		return logger.VulnResult{}, false
+	}
+
 	pocURL := s.BuildPoCURL(testURL, param, p.Value)
 	return logger.VulnResult{
-		URL:          testURL,
-		Parameter:    param,
-		Payload:      p.Value,
-		XSSType:      p.XSSType,
-		PayloadLevel: p.Level,
-		LevelName:    payload.LevelName(p.Level),
-		PoCURL:       pocURL,
-		Evidence:     fmt.Sprintf("[%s] %s", matchType, evidence),
-		Timestamp:    time.Now().Format(time.RFC3339),
-		StatusCode:   statusCode,
-		ResponseSize: len(body),
-		ReflectCount: strings.Count(body, p.Value),
-		Context:      context,
+		URL:           testURL,
+		Parameter:     param,
+		Payload:       p.Value,
+		XSSType:       p.XSSType,
+		PayloadLevel:  p.Level,
+		LevelName:     payload.LevelName(p.Level),
+		PoCURL:        pocURL,
+		Evidence:      evidence,
+		Timestamp:     time.Now().Format(time.RFC3339),
+		StatusCode:    statusCode,
+		ResponseSize:  len(body),
+		ReflectCount:  strings.Count(body, p.Value),
+		Context:       context,
+		MatchType:     matchType,
+		Severity:      sev,
+		SeverityScore: score,
+		Executable:    executable,
 	}, true
+}
+
+func IsExecutableReflection(body string, payloadVal string, context string) bool {
+	switch context {
+	case "text-node", "attribute-value-quoted":
+		return false
+	case "html-entity-encoded":
+		return false
+	}
+
+	for _, pat := range executablePayloadPatterns {
+		if pat.MatchString(payloadVal) {
+			idx := strings.Index(strings.ToLower(body), strings.ToLower(payloadVal[:min(len(payloadVal), 10)]))
+			if idx == -1 {
+				continue
+			}
+			surrounding := body
+			if idx > 50 {
+				surrounding = body[idx-50:]
+			}
+			if len(surrounding) > 200 {
+				surrounding = surrounding[:200]
+			}
+			lsurr := strings.ToLower(surrounding)
+			if strings.Contains(lsurr, "<script") ||
+				containsEventHandler(lsurr) ||
+				strings.Contains(lsurr, "javascript:") ||
+				strings.Contains(lsurr, "<svg") ||
+				strings.Contains(lsurr, "onerror") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsEventHandler(s string) bool {
+	events := []string{"onclick", "onmouseover", "onload", "onerror", "onfocus",
+		"onblur", "onchange", "onsubmit", "onkeyup", "onkeydown", "ontoggle",
+		"onanimationstart", "onbegin", "onstart"}
+	for _, ev := range events {
+		if strings.Contains(s, ev) {
+			return true
+		}
+	}
+	return false
+}
+
+func ScoreVulnerability(p payload.PayloadEntry, context string, matchType string, executable bool) (logger.SeverityLevel, int) {
+	score := 0
+
+	switch matchType {
+	case "raw":
+		score += 40
+	case "url-decoded":
+		score += 35
+	case "case-insensitive":
+		score += 30
+	case "html-entity-decoded":
+		score += 20
+	case "html-entity-encoded":
+		score += 5
+	default:
+		score += 10
+	}
+
+	switch context {
+	case "script-block":
+		score += 35
+	case "event-handler":
+		score += 30
+	case "attribute-value-url":
+		score += 25
+	case "html-attribute":
+		score += 15
+	case "text-node":
+		score += 5
+	case "attribute-value-quoted":
+		score += 5
+	default:
+		score += 10
+	}
+
+	if executable {
+		score += 20
+	}
+
+	score += p.Level * 2
+
+	switch {
+	case score >= 80:
+		return logger.SeverityCritical, score
+	case score >= 60:
+		return logger.SeverityHigh, score
+	case score >= 35:
+		return logger.SeverityMedium, score
+	case score >= 15:
+		return logger.SeverityLow, score
+	default:
+		return logger.SeverityInfo, score
+	}
 }
 
 func (s *Scanner) CheckReflection(body string, payloadVal string) (string, bool, string, string) {
@@ -525,25 +671,14 @@ func (s *Scanner) CheckReflection(body string, payloadVal string) (string, bool,
 		candidates = append(candidates, candidate{dec, "url-decoded"})
 	}
 
-	if dec2, err := url.QueryUnescape(url.QueryEscape(payloadVal)); err == nil {
-		if dec2 != payloadVal {
-			candidates = append(candidates, candidate{dec2, "double-url-decoded"})
-		}
-	}
-
 	htmlDec := HTMLEntityDecode(payloadVal)
 	if htmlDec != payloadVal {
-		candidates = append(candidates, candidate{htmlDec, "html-decoded"})
+		candidates = append(candidates, candidate{htmlDec, "html-entity-decoded"})
 	}
 
 	htmlEnc := HTMLEntityEncode(payloadVal)
 	if htmlEnc != payloadVal {
-		candidates = append(candidates, candidate{htmlEnc, "html-encoded-in-body"})
-	}
-
-	mixDec := HTMLEntityDecode(payloadVal)
-	if urlDec, err := url.QueryUnescape(mixDec); err == nil && urlDec != payloadVal {
-		candidates = append(candidates, candidate{urlDec, "html+url-decoded"})
+		candidates = append(candidates, candidate{htmlEnc, "html-entity-encoded"})
 	}
 
 	lowerBody := strings.ToLower(body)
@@ -557,18 +692,18 @@ func (s *Scanner) CheckReflection(body string, payloadVal string) (string, bool,
 		lowerNeedle := strings.ToLower(c.needle)
 		if strings.Contains(lowerBody, lowerNeedle) {
 			idx := strings.Index(lowerBody, lowerNeedle)
-			actualSnippet := body[idx : idx+len(lowerNeedle)]
-			ev := s.ExtractEvidence(body, actualSnippet)
-			ctx := s.DetermineContext(body, actualSnippet)
+			actual := body[idx : idx+len(lowerNeedle)]
+			ev := s.ExtractEvidence(body, actual)
+			ctx := s.DetermineContext(body, actual)
 			return ev, true, ctx, c.matchType + "/case-insensitive"
 		}
 	}
 
 	stripped := StripHTMLTags(payloadVal)
-	if stripped != "" && stripped != payloadVal && strings.Contains(body, stripped) {
+	if len(stripped) > 4 && stripped != payloadVal && strings.Contains(body, stripped) {
 		ev := s.ExtractEvidence(body, stripped)
 		ctx := s.DetermineContext(body, stripped)
-		return ev, true, ctx, "partial-strip"
+		return ev, true, ctx, "partial-content"
 	}
 
 	return "", false, "", ""
@@ -577,7 +712,7 @@ func (s *Scanner) CheckReflection(body string, payloadVal string) (string, bool,
 func (s *Scanner) ExtractEvidence(body string, needle string) string {
 	idx := strings.Index(body, needle)
 	if idx == -1 {
-		return ""
+		return "(not found)"
 	}
 	start := idx - 100
 	end := idx + len(needle) + 100
@@ -601,24 +736,32 @@ func (s *Scanner) DetermineContext(body string, needle string) string {
 	before := body[:idx]
 	lastTag := strings.LastIndex(before, "<")
 	lastClose := strings.LastIndex(before, ">")
+
 	if lastTag == -1 || lastClose > lastTag {
+		if strings.Contains(before[max(0, lastClose):], "=") {
+			return "attribute-value-quoted"
+		}
 		return "text-node"
 	}
+
 	segment := strings.ToLower(before[lastTag:])
+
 	if strings.HasPrefix(segment, "<script") {
 		return "script-block"
 	}
 	if strings.HasPrefix(segment, "<style") {
 		return "style-block"
 	}
-	if strings.Contains(segment, "href=") || strings.Contains(segment, "src=") || strings.Contains(segment, "action=") || strings.Contains(segment, "data=") {
+	if containsEventHandler(segment) {
+		return "event-handler"
+	}
+	if strings.Contains(segment, "href=") || strings.Contains(segment, "src=") ||
+		strings.Contains(segment, "action=") || strings.Contains(segment, "data=") ||
+		strings.Contains(segment, "formaction=") {
 		return "attribute-value-url"
 	}
 	if idx > 0 && (body[idx-1] == '"' || body[idx-1] == '\'') {
 		return "attribute-value-quoted"
-	}
-	if strings.Contains(segment, "on") {
-		return "event-handler"
 	}
 	return "html-attribute"
 }
@@ -638,6 +781,16 @@ func (s *Scanner) GetStats() ScanStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.Stats
+}
+
+func (s *Scanner) GetSeverityBreakdown() map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]int)
+	for _, r := range s.Results {
+		out[logger.SeverityTitle(r.Severity)]++
+	}
+	return out
 }
 
 func HTMLEntityDecode(input string) string {
@@ -689,4 +842,18 @@ func StripHTMLTags(input string) string {
 		}
 	}
 	return sb.String()
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
