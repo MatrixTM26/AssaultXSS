@@ -64,18 +64,17 @@ func main() {
 func PrintBanner() {
 	red := color.New(color.FgRed, color.Bold)
 	cyan := color.New(color.FgCyan, color.Bold)
-	yellow := color.New(color.FgYellow)
-	gray := color.New(color.FgHiBlack)
 
 	red.Println(`
- █████╗ ███████╗███████╗ █████╗ ██╗   ██╗██╗  ████████╗██╗  ██╗███████╗███████╗
-██╔══██╗██╔════╝██╔════╝██╔══██╗██║   ██║██║  ╚══██╔══╝╚██╗██╔╝██╔════╝██╔════╝
-███████║███████╗███████╗███████║██║   ██║██║     ██║    ╚███╔╝ ███████╗███████╗
-██╔══██║╚════██║╚════██║██╔══██║██║   ██║██║     ██║    ██╔██╗ ╚════██║╚════██║
-██║  ██║███████║███████║██║  ██║╚██████╔╝███████╗██║   ██╔╝ ██╗███████║███████║
-╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝  ╚═╝╚══════╝╚══════╝`)
-	cyan.Println("                    Advanced XSS Vulnerability Scanner v1.1.0")
-	yellow.Println("                    Authorized Bug Bounty Use Only")
-	gray.Println("                    HackerOne / Bugcrowd  |  Verify scope before testing")
+        _______                            __________  
+        ___    |___________________ ____  ____  /_  /_ 
+        __  /| |_  ___/_  ___/  __ '/  / / /_  /_  __/ 
+        _  ___ |(__  )_(__  )/ /_/ // /_/ /_  / / /_   
+        /_/  |_/____/ /____/ \__,_/ \__,_/ /_/  \__/ XSS
+        ------------------------------------------------
+	`)
+	cyan.Println("        [+] Author: MatrixTM26")
+	cyan.Println("        [+] Version: 1.0")
+	red.Println("        ------------------------------------------------")
 	fmt.Println()
 }
