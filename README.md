@@ -11,7 +11,7 @@ _  ___ |(__  )_(__  )/ /_/ // /_/ /_  / / /_
 High speed & lightweight Cross Site Scripting (XSS) vulnerabilities scanner toolkit writen in Go.
 
 ![License](https://img.shields.io/github/license/MatrixTM26/AssaultXSS?style=for-the-badge&color=green&labelColor=000000)
-![Golang](https://img.shields.io/badge/Golang-1.21+-000000?style=for-the-badge&logo=golang&logoColor=00bef9)
+![Golang](https://img.shields.io/badge/Golang-1.21+-000000?style=for-the-badge&logo=go&logoColor=00bef9)
 
 ### Installation & Usage
 
