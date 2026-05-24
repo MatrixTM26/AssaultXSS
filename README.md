@@ -109,7 +109,7 @@ go build -o assaultxss ./cmd/main.go
 
 #### License
 
-![License](https://img.shields.io/github/license/MatrixTM26/ORBITAL-VSAT?style=for-the-badge&color=red&labelColor=000000)
+![License](https://img.shields.io/github/license/MatrixTM26/AssaultXSS?style=for-the-badge&color=green&labelColor=000000)
 
 #### Support Me
 
