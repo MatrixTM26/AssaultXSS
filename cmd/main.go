@@ -9,8 +9,14 @@ import (
 	"assaultxss/internal/engine"
 	"assaultxss/internal/logger"
 	"assaultxss/internal/reporter"
+)
 
-	"github.com/fatih/color"
+const (
+	ansiReset  = "\033[0m"
+	ansiRed    = "\033[31;1m"
+	ansiCyan   = "\033[36;1m"
+	ansiYellow = "\033[33m"
+	ansiGray   = "\033[90m"
 )
 
 func main() {
@@ -21,7 +27,7 @@ func main() {
 
 	cfg, err := config.ParseFlags()
 	if err != nil {
-		color.New(color.FgRed, color.Bold).Printf("\n[ERR] %v\n\n", err)
+		fmt.Fprintf(os.Stderr, "\n%s[ERR]%s %v\n\n", ansiRed, ansiReset, err)
 		config.PrintHelp()
 		os.Exit(1)
 	}
@@ -29,13 +35,11 @@ func main() {
 	PrintBanner()
 
 	log := logger.NewLogger(cfg.Verbose)
-	log.Info(fmt.Sprintf("AssaultXSS v1.1.0 — %d target(s) loaded", len(cfg.URLs)))
-
+	log.Info(fmt.Sprintf("AssaultXSS v1.2.0 — %d target(s) loaded", len(cfg.URLs)))
 	if len(cfg.ExternalPayloads) > 0 {
-		log.Info(fmt.Sprintf("External payloads: %d loaded from file", len(cfg.ExternalPayloads)))
+		log.Info(fmt.Sprintf("external payloads: %d loaded", len(cfg.ExternalPayloads)))
 	}
-
-	log.Info("Authorized bug bounty mode — ensure written scope permission")
+	log.Info("authorized bug bounty mode — ensure written scope permission")
 	fmt.Println()
 
 	sc := engine.NewScanner(cfg, log)
@@ -51,7 +55,7 @@ func main() {
 		if len(results) > 0 {
 			reporter.ExportResults(results, cfg.ExportFile, log)
 		} else {
-			log.Info("No vulnerabilities found — export skipped")
+			log.Info("no vulnerabilities found — export skipped")
 		}
 	}
 
@@ -62,19 +66,15 @@ func main() {
 }
 
 func PrintBanner() {
-	red := color.New(color.FgRed, color.Bold)
-	cyan := color.New(color.FgCyan, color.Bold)
-
-	red.Println(`
-        _______                            __________  
-        ___    |___________________ ____  ____  /_  /_ 
-        __  /| |_  ___/_  ___/  __ '/  / / /_  /_  __/ 
-        _  ___ |(__  )_(__  )/ /_/ // /_/ /_  / / /_   
-        /_/  |_/____/ /____/ \__,_/ \__,_/ /_/  \__/ XSS
-        ------------------------------------------------
-	`)
-	cyan.Println("        [+] Author: MatrixTM26")
-	cyan.Println("        [+] Version: 1.0")
-	red.Println("        ------------------------------------------------")
-	fmt.Println()
+	fmt.Printf("%s", ansiRed)
+	fmt.Println(` █████╗ ███████╗███████╗ █████╗ ██╗   ██╗██╗  ████████╗██╗  ██╗███████╗███████╗`)
+	fmt.Println(`██╔══██╗██╔════╝██╔════╝██╔══██╗██║   ██║██║  ╚══██╔══╝╚██╗██╔╝██╔════╝██╔════╝`)
+	fmt.Println(`███████║███████╗███████╗███████║██║   ██║██║     ██║    ╚███╔╝ ███████╗███████╗`)
+	fmt.Println(`██╔══██║╚════██║╚════██║██╔══██║██║   ██║██║     ██║    ██╔██╗ ╚════██║╚════██║`)
+	fmt.Println(`██║  ██║███████║███████║██║  ██║╚██████╔╝███████╗██║   ██╔╝ ██╗███████║███████║`)
+	fmt.Println(`╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝  ╚═╝╚══════╝╚══════╝`)
+	fmt.Printf("%s", ansiReset)
+	fmt.Printf("%s                 Advanced XSS Vulnerability Scanner v1.2.0%s\n", ansiCyan, ansiReset)
+	fmt.Printf("%s                 Authorized Bug Bounty Use Only%s\n", ansiYellow, ansiReset)
+	fmt.Printf("%s                 HackerOne / Bugcrowd  |  Verify scope before testing%s\n\n", ansiGray, ansiReset)
 }

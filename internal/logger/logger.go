@@ -2,22 +2,10 @@ package logger
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/fatih/color"
-)
-
-type Level int
-
-const (
-	LevelDebug Level = iota
-	LevelInfo
-	LevelSuccess
-	LevelWarning
-	LevelError
-	LevelCritical
 )
 
 type SeverityLevel int
@@ -30,40 +18,66 @@ const (
 	SeverityCritical SeverityLevel = 4
 )
 
+var (
+	penGray    = NewPen(ansiGray)
+	penRed     = NewPen(ansiRed)
+	penGreen   = NewPen(ansiGreen)
+	penYellow  = NewPen(ansiYellow)
+	penBlue    = NewPen(ansiBlue)
+	penCyan    = NewPen(ansiCyan)
+	penHiRed   = NewPen(ansiHiRed)
+	penHiGreen = NewPen(ansiHiGreen)
+	penHiWhite = NewPen(ansiHiWhite)
+	penOrange  = NewPen(ansiOrange)
+	penMagenta = NewPen(ansiMagenta)
+
+	penBarCyan  = NewPenErr(ansiCyan)
+	penBarGreen = NewPenErr(ansiGreen)
+	penBarGray  = NewPenErr(ansiGray)
+)
+
 type Logger struct {
-	Verbose bool
-	mu      sync.Mutex
-	entries []LogEntry
+	Verbose   bool
+	mu        sync.Mutex
+	entries   []LogEntry
+	barActive bool
 }
 
 type LogEntry struct {
 	Timestamp string
 	Level     string
 	Message   string
-	Extra     map[string]string
 }
-
-var (
-	colorRed      = color.New(color.FgRed, color.Bold)
-	colorGreen    = color.New(color.FgGreen, color.Bold)
-	colorYellow   = color.New(color.FgYellow, color.Bold)
-	colorCyan     = color.New(color.FgCyan, color.Bold)
-	colorMagenta  = color.New(color.FgMagenta, color.Bold)
-	colorWhite    = color.New(color.FgWhite)
-	colorBlue     = color.New(color.FgBlue, color.Bold)
-	colorGray     = color.New(color.FgHiBlack)
-	colorOrange   = color.New(color.FgYellow)
-	colorHiRed    = color.New(color.FgHiRed, color.Bold)
-	colorHiGreen  = color.New(color.FgHiGreen, color.Bold)
-	colorHiWhite  = color.New(color.FgHiWhite, color.Bold)
-)
 
 func NewLogger(verbose bool) *Logger {
 	return &Logger{Verbose: verbose}
 }
 
-func (l *Logger) timestamp() string {
-	return time.Now().Format("15:04:05.000")
+func (l *Logger) SetBarActive(v bool) {
+	l.mu.Lock()
+	l.barActive = v
+	l.mu.Unlock()
+}
+
+func (l *Logger) ts() string {
+	return time.Now().Format("15:04:05")
+}
+
+func (l *Logger) clearLine() {
+	if l.barActive {
+		fmt.Fprintf(os.Stderr, "\r\033[2K")
+	}
+}
+
+func (l *Logger) line(levelColor *Pen, tag string, msg string) {
+	l.clearLine()
+	ts := l.ts()
+	fmt.Printf("%s %s %s\n",
+		penGray.Sprintf("[%s]", ts),
+		levelColor.Sprintf("[%s]", tag),
+		msg,
+	)
+	l.entries = append(l.entries, LogEntry{ts, tag, msg})
 }
 
 func (l *Logger) Debug(msg string) {
@@ -72,171 +86,183 @@ func (l *Logger) Debug(msg string) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	ts := l.timestamp()
-	colorGray.Printf("[%s] ", ts)
-	colorBlue.Print("[DBG] ")
-	colorGray.Printf("%s\n", msg)
-	l.entries = append(l.entries, LogEntry{Timestamp: ts, Level: "DEBUG", Message: msg})
+	l.line(penBlue, "DBG", penGray.Sprint(msg))
 }
 
 func (l *Logger) Info(msg string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	ts := l.timestamp()
-	colorGray.Printf("[%s] ", ts)
-	colorCyan.Print("[INF] ")
-	colorWhite.Printf("%s\n", msg)
-	l.entries = append(l.entries, LogEntry{Timestamp: ts, Level: "INFO", Message: msg})
-}
-
-func (l *Logger) Success(msg string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	ts := l.timestamp()
-	colorGray.Printf("[%s] ", ts)
-	colorGreen.Print("[VLN] ")
-	colorGreen.Printf("%s\n", msg)
-	l.entries = append(l.entries, LogEntry{Timestamp: ts, Level: "VULN", Message: msg})
+	l.line(penCyan, "INF", msg)
 }
 
 func (l *Logger) Warning(msg string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	ts := l.timestamp()
-	colorGray.Printf("[%s] ", ts)
-	colorYellow.Print("[WRN] ")
-	colorYellow.Printf("%s\n", msg)
-	l.entries = append(l.entries, LogEntry{Timestamp: ts, Level: "WARN", Message: msg})
+	l.line(penYellow, "WRN", penYellow.Sprint(msg))
 }
 
 func (l *Logger) Error(msg string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	ts := l.timestamp()
-	colorGray.Printf("[%s] ", ts)
-	colorRed.Print("[ERR] ")
-	colorRed.Printf("%s\n", msg)
-	l.entries = append(l.entries, LogEntry{Timestamp: ts, Level: "ERROR", Message: msg})
-}
-
-func (l *Logger) Critical(msg string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	ts := l.timestamp()
-	colorGray.Printf("[%s] ", ts)
-	colorMagenta.Print("[CRT] ")
-	colorMagenta.Printf("%s\n", msg)
-	l.entries = append(l.entries, LogEntry{Timestamp: ts, Level: "CRITICAL", Message: msg})
+	l.line(penRed, "ERR", penRed.Sprint(msg))
 }
 
 func (l *Logger) ScanStart(targetURL string, level int, threads int) {
-	l.Info(fmt.Sprintf("Scan initiated → %s", targetURL))
-	l.Info(fmt.Sprintf("Payload level: %d | Threads: %d", level, threads))
+	l.Info(fmt.Sprintf("target url: %s", targetURL))
+	l.Info(fmt.Sprintf("payload level: %d | threads: %d", level, threads))
 }
 
 func (l *Logger) ParamFound(param string, sourceURL string) {
 	if !l.Verbose {
 		return
 	}
-	l.Debug(fmt.Sprintf("Parameter discovered: [%s] at %s", param, sourceURL))
+	l.Debug(fmt.Sprintf("parameter found: [%s] at %s", param, sourceURL))
 }
 
 func (l *Logger) PayloadSent(targetURL string, param string, payloadStr string) {
 	if !l.Verbose {
 		return
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	truncated := payloadStr
 	if len(truncated) > 60 {
 		truncated = truncated[:60] + "..."
 	}
-	l.Debug(fmt.Sprintf("Testing [%s] | Payload: %s", param, truncated))
+	msg := fmt.Sprintf("testing [%s] -> %s",
+		penHiWhite.Sprint(param),
+		penGray.Sprint(truncated),
+	)
+	l.line(penBlue, "DBG", msg)
 }
 
-func (l *Logger) ReflectOnly(param string, targetURL string) {
+func (l *Logger) ReflectOnly(param string, note string) {
 	if !l.Verbose {
 		return
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	ts := l.timestamp()
-	colorGray.Printf("[%s] ", ts)
-	colorBlue.Print("[RFL] ")
-	colorBlue.Printf("Reflected (no exec context): [%s] %s\n", param, targetURL)
+	l.line(penBlue, "RFL", fmt.Sprintf("reflected/no-exec: [%s] %s", param, penGray.Sprint(note)))
+}
+
+func (l *Logger) PayloadResult(bar interface{ Render() }, param string, payloadStr string, tag string, exec bool) {
+	if !l.Verbose {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	truncated := payloadStr
+	if len(truncated) > 55 {
+		truncated = truncated[:55] + "..."
+	}
+
+	var tagColor string
+	switch tag {
+	case "EXEC", "VULN":
+		tagColor = ansiGreen
+	case "REFLECT":
+		tagColor = ansiYellow
+	case "SANITIZED":
+		tagColor = ansiBlue
+	case "ERR":
+		tagColor = ansiRed
+	default:
+		tagColor = ansiGray
+	}
+
+	ts := l.ts()
+	l.clearLine()
+
+	pct := ""
+	execStr := "NO"
+	if exec {
+		execStr = ansiGreen + "YES" + ansiReset
+		tagColor = ansiGreen
+	}
+
+	fmt.Printf("%s %s [%s%s%s] [%s] - %s\n",
+		penGray.Sprintf("[%s]", ts),
+		penBlue.Sprint("[DBG]"),
+		tagColor, tag, ansiReset,
+		penHiWhite.Sprint(param),
+		penGray.Sprint(truncated),
+	)
+	_ = pct
+	_ = execStr
+	l.entries = append(l.entries, LogEntry{ts, "DBG", fmt.Sprintf("[%s] [%s] - %s", tag, param, truncated)})
 }
 
 func (l *Logger) VulnFound(result VulnResult) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	ts := l.timestamp()
 
+	ts := l.ts()
 	sev := result.Severity
-	sevLabel, sevColor, borderColor := SeverityStyle(sev)
+	sevPen, tag := sevStyle(sev)
 
+	l.clearLine()
 	fmt.Println()
-	borderColor.Println(strings.Repeat("═", 82))
-	colorGray.Printf("[%s] ", ts)
-	sevColor.Printf(" %s  ", sevLabel)
-	colorHiWhite.Printf("XSS %s", SeverityTitle(sev))
-	if sev >= SeverityHigh {
-		colorHiRed.Printf(" ← EXPLOITABLE")
-	} else if sev == SeverityMedium {
-		colorYellow.Printf(" ← POTENTIAL")
-	} else {
-		colorBlue.Printf(" ← REFLECT ONLY")
-	}
-	fmt.Println()
-	borderColor.Println(strings.Repeat("─", 82))
+	fmt.Println(penGray.Sprint(strings.Repeat("-", 72)))
 
-	printField := func(label string, value string) {
-		colorGray.Printf("  %-14s", label+":")
-		colorWhite.Printf(" %s\n", value)
+	fmt.Printf("%s %s %s  %s\n",
+		penGray.Sprintf("[%s]", ts),
+		sevPen.Sprintf("[%s]", tag),
+		penHiWhite.Sprintf("parameter: [%s]", result.Parameter),
+		penGray.Sprintf("score: %s", sevPen.Sprintf("%d/100", result.SeverityScore)),
+	)
+
+	kv := func(key, val string) {
+		fmt.Printf("           %s %s\n", penGray.Sprintf("%-12s", key), val)
 	}
-	printFieldColor := func(label string, value string, c *color.Color) {
-		colorGray.Printf("  %-14s", label+":")
-		c.Printf(" %s\n", value)
+	kvC := func(key, val string, p *Pen) {
+		fmt.Printf("           %s %s\n", penGray.Sprintf("%-12s", key), p.Sprint(val))
 	}
 
-	printField("URL", result.URL)
-	printField("Parameter", result.Parameter)
-	printFieldColor("Severity", fmt.Sprintf("%s  [score: %d/100]", sevLabel, result.SeverityScore), sevColor)
-	printFieldColor("XSS Type", result.XSSType, colorCyan)
-	printField("Context", result.Context)
-	printField("Match Type", result.MatchType)
-	printField("Payload Lvl", fmt.Sprintf("%d (%s)", result.PayloadLevel, result.LevelName))
-	printFieldColor("Payload", result.Payload, colorYellow)
-	printFieldColor("PoC URL", result.PoCURL, colorHiGreen)
-	printField("Status Code", fmt.Sprintf("%d  |  Response: %d bytes  |  Reflect count: %d", result.StatusCode, result.ResponseSize, result.ReflectCount))
-	printFieldColor("Evidence", result.Evidence, colorGray)
+	kv("target:", result.URL)
+	kvC("payload:", result.Payload, penYellow)
+	kv("context:", fmt.Sprintf("%s  (match: %s)", result.Context, result.MatchType))
+	kv("type:", fmt.Sprintf("%s  lvl:%d (%s)  exec:%v  reflects:%d",
+		result.XSSType, result.PayloadLevel, result.LevelName,
+		result.Executable, result.ReflectCount,
+	))
+	kvC("poc:", result.PoCURL, penHiGreen)
 
-	if sev >= SeverityHigh {
-		colorGray.Printf("  %-14s", "Report Notes:")
-		colorHiGreen.Printf(" Payload executed in %s — suitable for bug bounty report\n", result.Context)
-	} else if sev == SeverityMedium {
-		colorGray.Printf("  %-14s", "Report Notes:")
-		colorYellow.Printf(" Reflected but execution not confirmed — verify manually in browser\n")
-	} else {
-		colorGray.Printf("  %-14s", "Report Notes:")
-		colorBlue.Printf(" Value reflected in non-executable context — likely informational\n")
+	if result.Evidence != "" && result.Evidence != "(not found)" {
+		ev := result.Evidence
+		if len(ev) > 110 {
+			ev = ev[:110] + "..."
+		}
+		kvC("evidence:", ev, penGray)
 	}
 
-	borderColor.Println(strings.Repeat("═", 82))
+	switch {
+	case sev >= SeverityHigh:
+		kvC("note:", "executable context confirmed — ready for bug bounty report", penHiGreen)
+	case sev == SeverityMedium:
+		kvC("note:", "reflected — verify execution manually in browser", penOrange)
+	default:
+		kvC("note:", "reflected in non-executable context", penBlue)
+	}
+
+	fmt.Println(penGray.Sprint(strings.Repeat("-", 72)))
 	fmt.Println()
 
-	l.entries = append(l.entries, LogEntry{Timestamp: ts, Level: SeverityTitle(sev), Message: result.URL})
+	l.entries = append(l.entries, LogEntry{ts, SeverityTitle(sev), result.URL})
 }
 
-func SeverityStyle(sev SeverityLevel) (string, *color.Color, *color.Color) {
+func sevStyle(sev SeverityLevel) (*Pen, string) {
 	switch sev {
 	case SeverityCritical:
-		return "[ CRITICAL ]", colorHiRed, colorHiRed
+		return penHiRed, "CRITICAL"
 	case SeverityHigh:
-		return "[   HIGH   ]", colorRed, colorRed
+		return penRed, "HIGH"
 	case SeverityMedium:
-		return "[  MEDIUM  ]", colorYellow, colorOrange
+		return penYellow, "MEDIUM"
 	case SeverityLow:
-		return "[   LOW    ]", colorBlue, colorBlue
+		return penBlue, "LOW"
 	default:
-		return "[   INFO   ]", colorGray, colorGray
+		return penGray, "INFO"
 	}
 }
 
@@ -255,40 +281,55 @@ func SeverityTitle(sev SeverityLevel) string {
 	}
 }
 
-func (l *Logger) PrintSummary(payloadsSent int, vulns int, scanned int, elapsed time.Duration, bySevertiy map[string]int) {
+func SeverityStyle(sev SeverityLevel) (string, *Pen, *Pen) {
+	p, badge := sevStyle(sev)
+	return badge, p, p
+}
+
+func (l *Logger) PrintSummary(payloadsSent int, vulns int, scanned int, elapsed time.Duration, bySeverity map[string]int) {
 	fmt.Println()
-	colorCyan.Println(strings.Repeat("═", 60))
-	colorHiWhite.Println("  SCAN SUMMARY")
-	colorCyan.Println(strings.Repeat("─", 60))
-	colorWhite.Printf("  URLs Scanned      : %d\n", scanned)
-	colorWhite.Printf("  Payloads Sent     : %d\n", payloadsSent)
+	fmt.Println(penCyan.Sprint(strings.Repeat("=", 50)))
+	fmt.Println(penCyan.Sprint("  scan summary"))
+	fmt.Println(penGray.Sprint(strings.Repeat("-", 50)))
+
+	row := func(k, v string) {
+		fmt.Printf("  %s %s\n", penGray.Sprintf("%-22s", k), v)
+	}
+
+	row("urls scanned:", fmt.Sprintf("%d", scanned))
+	row("payloads sent:", fmt.Sprintf("%d", payloadsSent))
+	row("time elapsed:", elapsed.Round(time.Millisecond).String())
+
 	if vulns > 0 {
-		colorHiRed.Printf("  Total Findings    : %d VULNERABILITIES FOUND\n", vulns)
+		fmt.Println(penGray.Sprint(strings.Repeat("-", 50)))
+		row("total findings:", penHiRed.Sprintf("%d", vulns))
+		for _, sev := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW"} {
+			if v, ok := bySeverity[sev]; ok && v > 0 {
+				p, _ := sevStyle(sevFromString(sev))
+				fmt.Printf("  %s %s\n", penGray.Sprintf("%-22s", ""), p.Sprintf("[%s] %d", sev, v))
+			}
+		}
 	} else {
-		colorWhite.Printf("  Total Findings    : 0\n")
+		row("total findings:", "0")
 	}
-	if len(bySevertiy) > 0 {
-		colorCyan.Println(strings.Repeat("─", 60))
-		colorHiWhite.Println("  BREAKDOWN BY SEVERITY")
-		if v, ok := bySevertiy["CRITICAL"]; ok && v > 0 {
-			colorHiRed.Printf("    %-10s: %d\n", "CRITICAL", v)
-		}
-		if v, ok := bySevertiy["HIGH"]; ok && v > 0 {
-			colorRed.Printf("    %-10s: %d\n", "HIGH", v)
-		}
-		if v, ok := bySevertiy["MEDIUM"]; ok && v > 0 {
-			colorYellow.Printf("    %-10s: %d\n", "MEDIUM", v)
-		}
-		if v, ok := bySevertiy["LOW"]; ok && v > 0 {
-			colorBlue.Printf("    %-10s: %d\n", "LOW", v)
-		}
-		if v, ok := bySevertiy["INFO"]; ok && v > 0 {
-			colorGray.Printf("    %-10s: %d\n", "INFO", v)
-		}
-	}
-	colorWhite.Printf("  Time Elapsed      : %s\n", elapsed.Round(time.Millisecond))
-	colorCyan.Println(strings.Repeat("═", 60))
+
+	fmt.Println(penCyan.Sprint(strings.Repeat("=", 50)))
 	fmt.Println()
+}
+
+func sevFromString(s string) SeverityLevel {
+	switch s {
+	case "CRITICAL":
+		return SeverityCritical
+	case "HIGH":
+		return SeverityHigh
+	case "MEDIUM":
+		return SeverityMedium
+	case "LOW":
+		return SeverityLow
+	default:
+		return SeverityInfo
+	}
 }
 
 func (l *Logger) GetEntries() []LogEntry {
@@ -298,21 +339,21 @@ func (l *Logger) GetEntries() []LogEntry {
 }
 
 type VulnResult struct {
-	URL           string
-	Parameter     string
-	Payload       string
-	XSSType       string
-	PayloadLevel  int
-	LevelName     string
-	PoCURL        string
-	Evidence      string
-	Timestamp     string
-	StatusCode    int
-	ResponseSize  int
-	ReflectCount  int
-	Context       string
-	MatchType     string
-	Severity      SeverityLevel
-	SeverityScore int
-	Executable    bool
+	URL           string        `json:"url"`
+	Parameter     string        `json:"parameter"`
+	Payload       string        `json:"payload"`
+	XSSType       string        `json:"xss_type"`
+	PayloadLevel  int           `json:"payload_level"`
+	LevelName     string        `json:"level_name"`
+	PoCURL        string        `json:"poc_url"`
+	Evidence      string        `json:"evidence"`
+	Timestamp     string        `json:"timestamp"`
+	StatusCode    int           `json:"status_code"`
+	ResponseSize  int           `json:"response_size"`
+	ReflectCount  int           `json:"reflect_count"`
+	Context       string        `json:"context"`
+	MatchType     string        `json:"match_type"`
+	Severity      SeverityLevel `json:"severity"`
+	SeverityScore int           `json:"severity_score"`
+	Executable    bool          `json:"executable"`
 }

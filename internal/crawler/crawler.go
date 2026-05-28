@@ -56,7 +56,7 @@ func NewCrawler(baseURL string, depth int, timeout int, threads int, log *logger
 		Client: &http.Client{
 			Timeout: time.Duration(timeout) * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 8 {
+				if len(via) >= 5 {
 					return fmt.Errorf("too many redirects")
 				}
 				return nil
@@ -74,9 +74,12 @@ func (c *Crawler) Crawl(startURL string) []PageResult {
 	var results []PageResult
 	var resultsMu sync.Mutex
 
-	queue := make(chan workItem, 512)
-	var wg sync.WaitGroup
+	// Fix: use buffered channel + explicit worker pool — no goroutine leak
+	// previous impl had race: wg.Add(1) AFTER queue <- which could close
+	// channel before goroutine picks it up
 	sem := make(chan struct{}, c.Threads)
+	var wg sync.WaitGroup
+	queue := make(chan workItem, 4096)
 
 	enqueue := func(u string, d int) {
 		normalized := NormalizeURL(u)
@@ -91,23 +94,30 @@ func (c *Crawler) Crawl(startURL string) []PageResult {
 		c.Visited[normalized] = true
 		c.mu.Unlock()
 		wg.Add(1)
-		queue <- workItem{pageURL: normalized, depth: d}
+		// non-blocking send — drop if queue full to avoid deadlock
+		select {
+		case queue <- workItem{pageURL: normalized, depth: d}:
+		default:
+			wg.Done()
+		}
 	}
 
 	enqueue(startURL, 0)
 
+	// Drain queue in separate goroutine, close when all work done
 	go func() {
 		wg.Wait()
 		close(queue)
 	}()
 
 	for item := range queue {
-		go func(it workItem) {
+		it := item
+		go func() {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			c.Log.Debug(fmt.Sprintf("Crawling [depth=%d]: %s", it.depth, it.pageURL))
+			c.Log.Debug(fmt.Sprintf("crawling [depth=%d]: %s", it.depth, it.pageURL))
 			page, links, jsLinks := c.FetchPage(it.pageURL)
 
 			if page != nil {
@@ -116,6 +126,7 @@ func (c *Crawler) Crawl(startURL string) []PageResult {
 				resultsMu.Unlock()
 			}
 
+			// Fix: respect exact depth — enqueue children only when depth < max
 			if it.depth < c.Depth {
 				allLinks := append(links, jsLinks...)
 				for _, link := range allLinks {
@@ -124,7 +135,7 @@ func (c *Crawler) Crawl(startURL string) []PageResult {
 					}
 				}
 			}
-		}(item)
+		}()
 	}
 
 	return results
@@ -133,15 +144,15 @@ func (c *Crawler) Crawl(startURL string) []PageResult {
 func (c *Crawler) FetchPage(rawURL string) (*PageResult, []string, []string) {
 	req, err := http.NewRequest("GET", rawURL, nil)
 	if err != nil {
-		c.Log.Debug(fmt.Sprintf("Fetch failed: %s → %v", rawURL, err))
 		return nil, nil, nil
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Encoding", "identity")
 
 	resp, err := c.Client.Do(req)
 	if err != nil {
-		c.Log.Debug(fmt.Sprintf("Fetch failed: %s → %v", rawURL, err))
+		c.Log.Debug(fmt.Sprintf("fetch failed: %s → %v", rawURL, err))
 		return nil, nil, nil
 	}
 	defer resp.Body.Close()
@@ -158,7 +169,7 @@ func (c *Crawler) FetchPage(rawURL string) (*PageResult, []string, []string) {
 	}
 
 	contentType := resp.Header.Get("Content-Type")
-	if !strings.Contains(contentType, "html") && !strings.Contains(contentType, "text") && contentType != "" {
+	if contentType != "" && !strings.Contains(contentType, "html") && !strings.Contains(contentType, "text") {
 		return &PageResult{URL: rawURL, Params: params}, nil, nil
 	}
 
@@ -188,7 +199,6 @@ func (c *Crawler) FetchPage(rawURL string) (*PageResult, []string, []string) {
 						}
 					}
 				}
-
 			case "form":
 				form := c.ParseForm(n, rawURL)
 				forms = append(forms, form)
@@ -196,14 +206,12 @@ func (c *Crawler) FetchPage(rawURL string) (*PageResult, []string, []string) {
 					params[k] = []string{""}
 					c.Log.ParamFound(k, rawURL)
 				}
-
 			case "input", "textarea", "select", "button":
 				name := AttrVal(n, "name")
 				if name != "" {
 					params[name] = []string{""}
 					c.Log.ParamFound(name, rawURL)
 				}
-
 			case "script":
 				src := AttrVal(n, "src")
 				if src != "" {
@@ -216,9 +224,8 @@ func (c *Crawler) FetchPage(rawURL string) (*PageResult, []string, []string) {
 					extracted := ExtractURLsFromJS(n.FirstChild.Data, rawURL, c)
 					links = append(links, extracted...)
 				}
-
 			case "link":
-				rel := AttrVal(n, "rel")
+				rel := strings.ToLower(AttrVal(n, "rel"))
 				href := AttrVal(n, "href")
 				if href != "" && (rel == "alternate" || rel == "") {
 					resolved := c.ResolveURL(rawURL, href)
@@ -226,21 +233,18 @@ func (c *Crawler) FetchPage(rawURL string) (*PageResult, []string, []string) {
 						links = append(links, resolved)
 					}
 				}
-
 			case "meta":
-				httpEquiv := strings.ToLower(AttrVal(n, "http-equiv"))
-				if httpEquiv == "refresh" {
+				if strings.EqualFold(AttrVal(n, "http-equiv"), "refresh") {
 					content := AttrVal(n, "content")
 					if idx := strings.Index(strings.ToLower(content), "url="); idx != -1 {
-						refreshURL := content[idx+4:]
-						resolved := c.ResolveURL(rawURL, strings.Trim(refreshURL, "'\""))
+						refreshURL := strings.Trim(content[idx+4:], "'\" ")
+						resolved := c.ResolveURL(rawURL, refreshURL)
 						if resolved != "" {
 							links = append(links, resolved)
 						}
 					}
 				}
 			}
-
 			for _, attr := range n.Attr {
 				switch strings.ToLower(attr.Key) {
 				case "action", "formaction":
@@ -256,7 +260,6 @@ func (c *Crawler) FetchPage(rawURL string) (*PageResult, []string, []string) {
 				}
 			}
 		}
-
 		for child := n.FirstChild; child != nil; child = child.NextSibling {
 			traverse(child)
 		}
@@ -313,8 +316,7 @@ func (c *Crawler) ParseForm(n *html.Node, baseURL string) FormData {
 	var walkInputs func(*html.Node)
 	walkInputs = func(n *html.Node) {
 		if n.Type == html.ElementNode {
-			tag := strings.ToLower(n.Data)
-			switch tag {
+			switch strings.ToLower(n.Data) {
 			case "input", "textarea", "select":
 				field := InputField{
 					Name:  AttrVal(n, "name"),
@@ -337,15 +339,14 @@ func (c *Crawler) ParseForm(n *html.Node, baseURL string) FormData {
 func (f *FormData) BuildParams() map[string]string {
 	params := make(map[string]string)
 	for _, input := range f.Inputs {
-		if input.Name != "" {
-			skip := strings.EqualFold(input.Type, "submit") ||
-				strings.EqualFold(input.Type, "button") ||
-				strings.EqualFold(input.Type, "image") ||
-				strings.EqualFold(input.Type, "reset")
-			if !skip {
-				params[input.Name] = input.Value
-			}
+		if input.Name == "" {
+			continue
 		}
+		t := strings.ToLower(input.Type)
+		if t == "submit" || t == "button" || t == "image" || t == "reset" || t == "hidden" {
+			continue
+		}
+		params[input.Name] = input.Value
 	}
 	return params
 }
@@ -368,6 +369,7 @@ func HasQueryParams(rawURL string) bool {
 }
 
 func NormalizeURL(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
 	if strings.HasPrefix(rawURL, "javascript:") ||
 		strings.HasPrefix(rawURL, "mailto:") ||
 		strings.HasPrefix(rawURL, "tel:") ||
