@@ -39,7 +39,7 @@ type ReflectionResult struct {
 	ReflectCount int
 	Evidence     string
 	Context      string
-	QuoteContext  QuoteCtx
+	QuoteContext QuoteCtx
 	Sanitized    bool
 	SanitizeNote string
 }
@@ -47,7 +47,7 @@ type ReflectionResult struct {
 type QuoteCtx int
 
 const (
-	QuoteNone     QuoteCtx = iota
+	QuoteNone QuoteCtx = iota
 	QuoteDouble
 	QuoteSingle
 	QuoteUnquoted
@@ -492,23 +492,23 @@ func (s *Scanner) AnalyzeResponse(body string, p payload.PayloadEntry, param str
 
 	pocURL := BuildPoCURL(testURL, param, p.Value)
 	return logger.VulnResult{
-		URL:          testURL,
-		Parameter:    param,
-		Payload:      p.Value,
-		XSSType:      p.XSSType,
-		PayloadLevel: p.Level,
-		LevelName:    payload.LevelName(p.Level),
-		PoCURL:       pocURL,
-		Evidence:     rr.Evidence,
-		Timestamp:    time.Now().Format(time.RFC3339),
-		StatusCode:   statusCode,
-		ResponseSize: len(body),
-		ReflectCount: rr.ReflectCount,
-		Context:      rr.Context,
-		MatchType:    rr.MatchType,
-		Severity:     sev,
+		URL:           testURL,
+		Parameter:     param,
+		Payload:       p.Value,
+		XSSType:       p.XSSType,
+		PayloadLevel:  p.Level,
+		LevelName:     payload.LevelName(p.Level),
+		PoCURL:        pocURL,
+		Evidence:      rr.Evidence,
+		Timestamp:     time.Now().Format(time.RFC3339),
+		StatusCode:    statusCode,
+		ResponseSize:  len(body),
+		ReflectCount:  rr.ReflectCount,
+		Context:       rr.Context,
+		MatchType:     rr.MatchType,
+		Severity:      sev,
 		SeverityScore: score,
-		Executable:   executable,
+		Executable:    executable,
 	}, true
 }
 
@@ -882,11 +882,4 @@ func StripHTMLTags(input string) string {
 		}
 	}
 	return sb.String()
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

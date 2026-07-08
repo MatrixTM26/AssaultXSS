@@ -21,7 +21,6 @@ const (
 var (
 	penGray    = NewPen(ansiGray)
 	penRed     = NewPen(ansiRed)
-	penGreen   = NewPen(ansiGreen)
 	penYellow  = NewPen(ansiYellow)
 	penBlue    = NewPen(ansiBlue)
 	penCyan    = NewPen(ansiCyan)
@@ -29,11 +28,6 @@ var (
 	penHiGreen = NewPen(ansiHiGreen)
 	penHiWhite = NewPen(ansiHiWhite)
 	penOrange  = NewPen(ansiOrange)
-	penMagenta = NewPen(ansiMagenta)
-
-	penBarCyan  = NewPenErr(ansiCyan)
-	penBarGreen = NewPenErr(ansiGreen)
-	penBarGray  = NewPenErr(ansiGray)
 )
 
 type Logger struct {

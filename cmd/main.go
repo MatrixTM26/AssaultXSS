@@ -75,6 +75,4 @@ func PrintBanner() {
 	fmt.Println(`╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝  ╚═╝╚══════╝╚══════╝`)
 	fmt.Printf("%s", ansiReset)
 	fmt.Printf("%s                 Advanced XSS Vulnerability Scanner v1.2.0%s\n", ansiCyan, ansiReset)
-	fmt.Printf("%s                 Authorized Bug Bounty Use Only%s\n", ansiYellow, ansiReset)
-	fmt.Printf("%s                 HackerOne / Bugcrowd  |  Verify scope before testing%s\n\n", ansiGray, ansiReset)
 }

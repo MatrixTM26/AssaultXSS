@@ -1,5 +1,5 @@
 module assaultxss
 
-go 1.21
+go 1.25.0
 
-require golang.org/x/net v0.24.0
+require golang.org/x/net v0.56.0
